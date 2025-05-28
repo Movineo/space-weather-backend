@@ -13,7 +13,6 @@ export interface SpaceWeatherEvent {
   relevantToRoles: string[];
 }
 
-// Define the exact shape of the preferences object
 interface Preferences {
   geomagnetic?: boolean;
   solarflare?: boolean;
@@ -53,7 +52,6 @@ export const fetchSpaceWeatherEvents = async (
   }
 
   const role = user.role || 'general';
-  // Safely cast and access preferences with defaults
   const userPrefs = (user.preferences || {}) as Preferences;
   const preferences: UserPreferences = {
     geomagnetic: userPrefs.geomagnetic ?? false,
@@ -63,6 +61,28 @@ export const fetchSpaceWeatherEvents = async (
     radioblackout: userPrefs.radioblackout ?? false,
     auroral: userPrefs.auroral ?? false,
   };
+
+  // Get latitude using OpenCage Geocoding API
+  let latitude = 0;
+  if (user.location) {
+    try {
+      const geocodingResponse = await axios.get(
+        `https://api.opencagedata.com/geocode/v1/json?q=${encodeURIComponent(user.location)}&key=${process.env.OPENCAGE_API_KEY}&limit=1`
+      );
+      const result = geocodingResponse.data.results[0];
+      if (result) {
+        latitude = result.geometry.lat;
+        logger.info(`Fetched latitude ${latitude} for location ${user.location}`);
+      } else {
+        logger.warn(`No geocoding result for ${user.location}`);
+      }
+    } catch (error) {
+      logger.error('Failed to fetch geocoding data', { error, location: user.location });
+    }
+  }
+
+  const isHighLatitude = Math.abs(latitude) > 50; // Auroral activity typically visible above 50°
+  const isMidLatitude = Math.abs(latitude) > 30 && Math.abs(latitude) <= 50; // Some visibility during strong events
 
   try {
     // Geomagnetic (Kp index)
@@ -93,8 +113,7 @@ export const fetchSpaceWeatherEvents = async (
       }
       // Auroral Activity (derived from Kp for high-latitude regions)
       if (kpValue >= 5 && preferences.auroral) {
-        const location = user.location?.toLowerCase() || '';
-        if (location.includes('nairobi') || location.includes('north')) {
+        if (isHighLatitude || (isMidLatitude && kpValue >= 7)) {
           const level = kpValue >= 7 ? 'Critical' : 'Warning';
           const roleSpecificImpact = role === 'farmer' ? 'possible livestock disorientation' : 'visible auroras may cause distractions';
           const message = `${level} Alert: Increased auroral activity due to Kp ${kpValue}. Impacts: ${roleSpecificImpact}. Issued at ${timeTag}.`;
@@ -149,8 +168,8 @@ export const fetchSpaceWeatherEvents = async (
       const flux = parseFloat(item.flux) || 0;
       const timeTag = item.time_tag;
       const flareClass = item.energy.includes('0.1-0.8') ? 'X-ray' : 'Other';
-      if (flareClass === 'X-ray' && flux > 1e-5 && preferences.radioblackout) { // M-class flare threshold
-        const level = flux > 1e-4 ? 'Critical' : 'Warning'; // X-class for Critical
+      if (flareClass === 'X-ray' && flux > 1e-5 && preferences.radioblackout) {
+        const level = flux > 1e-4 ? 'Critical' : 'Warning';
         const roleSpecificImpact =
           role === 'telecom' ? 'severe HF radio blackouts' :
           role === 'pilot' ? 'navigation and communication failures' :
@@ -177,7 +196,7 @@ export const fetchSpaceWeatherEvents = async (
     for (const item of cmeData) {
       const speed = parseFloat(item.speed) || 0;
       const timeTag = item.startTime;
-      if (speed > 500 && preferences.cme) { // High-speed CME
+      if (speed > 500 && preferences.cme) {
         const level = speed > 1000 ? 'Critical' : 'Warning';
         const roleSpecificImpact =
           role === 'telecom' ? 'potential satellite damage' :
@@ -200,7 +219,7 @@ export const fetchSpaceWeatherEvents = async (
   }
 
   try {
-    // Radiation Storms (using alternative API)
+    // Radiation Storms (using proton flux)
     const radiationResponse = await axios.get('https://services.swpc.noaa.gov/json/goes/primary/proton-flux-7-day.json');
     const radiationData = radiationResponse.data;
     for (const item of radiationData) {
@@ -228,7 +247,7 @@ export const fetchSpaceWeatherEvents = async (
   }
 
   if (events.length === 0) {
-    logger.info(`No significant space weather events found for user ${userPhoneNumber}`);
+    logger.info(`No significant space weather events found for user ${userPhoneNumber} at latitude ${latitude}`);
   }
 
   return events;

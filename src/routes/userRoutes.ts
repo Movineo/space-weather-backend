@@ -3,6 +3,7 @@ import { subscribeUser, unsubscribeUser } from '../controllers/userController';
 import { PrismaClient } from '@prisma/client';
 import { logger } from '../app';
 import { sendSMS } from '../services/smsService';
+import nodemailer from 'nodemailer';
 
 interface UssdBody {
   sessionId: string;
@@ -27,6 +28,13 @@ interface SessionData {
 
 const prisma = new PrismaClient();
 const sessions: { [key: string]: SessionData } = {};
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 const router = Router();
 
@@ -37,7 +45,6 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
   const { sessionId, serviceCode, phoneNumber, text } = req.body;
   let response = '';
 
-  // Set response timeout to prevent hanging
   res.setTimeout(5000, () => {
     logger.warn('USSD response timed out', { sessionId });
     res.setHeader('Content-Type', 'text/plain');
@@ -54,12 +61,9 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
 
     logger.info('Parsed input', { userInput, step, input });
 
-    // Step 1: Main Menu
     if (step === 1 && input === '') {
       response = 'CON Welcome to Space Weather Alerts\n1. Subscribe\n2. Unsubscribe\n3. Check Status';
-    }
-    // Step 1: Handle Main Menu Selection
-    else if (step === 1) {
+    } else if (step === 1) {
       if (input === '1') {
         response = 'CON Enter your location (e.g., Nairobi):';
       } else if (input === '2') {
@@ -84,9 +88,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         response = 'END Invalid selection. Try again.';
         delete sessions[sessionId];
       }
-    }
-    // Step 2: Enter Location (Subscription Flow)
-    else if (step === 2 && userInput[0] === '1') {
+    } else if (step === 2 && userInput[0] === '1') {
       const location = input.trim();
       if (!location) {
         response = 'CON Location cannot be empty. Enter your location:';
@@ -99,9 +101,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         };
         response = 'CON Select role:\n1. Pilot\n2. Telecom Operator\n3. Farmer\n4. General';
       }
-    }
-    // Step 3: Select Role (Subscription Flow)
-    else if (step === 3 && userInput[0] === '1') {
+    } else if (step === 3 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
         delete sessions[sessionId];
@@ -120,9 +120,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
       }
       sessions[sessionId] = { ...session, role };
       response = 'CON Enter your email for critical alerts (or 0 to skip):';
-    }
-    // Step 4: Enter Email (Subscription Flow)
-    else if (step === 4 && userInput[0] === '1') {
+    } else if (step === 4 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
         delete sessions[sessionId];
@@ -139,9 +137,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         sessions[sessionId] = { ...session, email };
         response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
       }
-    }
-    // Step 5 and Beyond: Adjust Preferences and Subscribe
-    else if (step >= 5 && userInput[0] === '1') {
+    } else if (step >= 5 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
         delete sessions[sessionId];
@@ -172,7 +168,19 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
           create: { phoneNumber, location, subscribed: true, role, email, preferences },
         });
         logger.info('Upsert result', user);
+
         await sendSMS(phoneNumber, 'Thank you for subscribing to Space Weather Alerts!');
+        if (email) {
+          await transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: email,
+            subject: 'Successful Subscription to Space Weather Alerts',
+            text: `Thank you for subscribing to Space Weather Alerts!\n\nDetails:\n- Location: ${location}\n- Role: ${role}\n- Preferences: ${JSON.stringify(preferences)}\n\nYou will receive SMS and critical alerts via email at ${email}.`,
+          }).catch(err => {
+            logger.error('Failed to send subscription email', { error: err, email });
+          });
+        }
+
         response = `END Subscribed in ${location} as ${role} with preferences: ${JSON.stringify(preferences)}!`;
         delete sessions[sessionId];
       } else {
@@ -189,7 +197,6 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
     delete sessions[sessionId];
   }
 
-  // Send response
   res.setHeader('Content-Type', 'text/plain');
   logger.info('Sending USSD response', { sessionId, response });
   res.send(response || 'END No response generated.');

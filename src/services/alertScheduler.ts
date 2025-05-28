@@ -23,20 +23,18 @@ export const startAlertScheduler = () => {
       }
 
       for (const user of users) {
-        // Fetch events specific to the user
         const events = await fetchSpaceWeatherEvents(user.phoneNumber);
         if (events.length === 0) {
-          logger.info(`No events for user ${user.phoneNumber}`);
+          logger.info(`No events for user ${user.phoneNumber} at location ${user.location}`);
           continue;
         }
 
         for (const event of events) {
-          // Check if an alert for this type was sent within the last 5 minutes
           const recentAlert = await prisma.alert.findFirst({
             where: {
               type: event.type,
               sentAt: {
-                gte: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
+                gte: new Date(Date.now() - 5 * 60 * 1000),
                 lte: new Date(),
               },
             },
@@ -55,35 +53,63 @@ export const startAlertScheduler = () => {
               else if (user.role === 'telecom') targetedMessage += ' Telecom: Monitor lines.';
               else if (user.role === 'farmer') targetedMessage += ' Farmers: Prepare for power issues.';
 
-              smsPromises.push(sendSMS(user.phoneNumber, targetedMessage));
+              smsPromises.push(
+                sendSMS(user.phoneNumber, targetedMessage).catch(err => {
+                  logger.error('Failed to send SMS', { error: err, phoneNumber: user.phoneNumber });
+                  throw err;
+                })
+              );
+
               if (event.level === 'Critical' && user.email) {
-  emailPromises.push(
-    transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: user.email,
-      subject: `Critical Alert: ${event.type.toUpperCase()}`,
-      text: targetedMessage,
-    })
-    .then(() => {}) // Convert Promise<SentMessageInfo> to Promise<void>
-    .catch(err => {
-      logger.error('Failed to send email', { error: err, email: user.email });
-      throw err;
-    })
-  );
-}
+                emailPromises.push(
+                  transporter.sendMail({
+                    from: process.env.EMAIL_USER,
+                    to: user.email,
+                    subject: `Critical Alert: ${event.type.toUpperCase()}`,
+                    text: targetedMessage,
+                  })
+                  .then(() => undefined) // Convert Promise<SentMessageInfo> to Promise<void>
+                  .catch(err => {
+                    logger.error('Failed to send email', { error: err, email: user.email });
+                    throw err;
+                  })
+                );
+              }
             }
 
             await Promise.all([...smsPromises, ...emailPromises]);
 
-            await prisma.alert.create({
+            const alert = await prisma.alert.create({
               data: {
                 message: event.message,
                 sentAt: new Date(),
                 level: event.level,
                 type: event.type,
+                userId: user.id,
               },
             });
-            logger.info(`Alert sent for event ${event.id} (Level: ${event.level}, Type: ${event.type}) to ${user.phoneNumber}`);
+
+            if (smsPromises.length > 0) {
+              await prisma.alertDelivery.create({
+                data: {
+                  alertId: alert.id,
+                  phoneNumber: user.phoneNumber,
+                  status: 'SENT',
+                },
+              });
+            }
+
+            if (emailPromises.length > 0) {
+              await prisma.alertDelivery.create({
+                data: {
+                  alertId: alert.id,
+                  phoneNumber: user.phoneNumber,
+                  status: 'EMAIL_SENT',
+                },
+              });
+            }
+
+            logger.info(`Alert sent for event ${event.id} (Level: ${event.level}, Type: ${event.type}) to ${user.phoneNumber} at ${user.location}`);
           } else {
             logger.info(`Skipped duplicate alert for ${event.id} (within 5 minutes)`);
           }
@@ -94,7 +120,6 @@ export const startAlertScheduler = () => {
     }
   };
 
-  // Run immediately and then every 30 minutes
   poll();
-  setInterval(poll, 30 * 60 * 1000); // 30 minutes
+  setInterval(poll, 30 * 60 * 1000);
 };
