@@ -71,6 +71,24 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         if (user) {
           await prisma.user.update({ where: { phoneNumber }, data: { subscribed: false } });
           logger.info('Unsubscribed user', { phoneNumber });
+
+          // Send SMS notification
+          await sendSMS(phoneNumber, 'You have unsubscribed from Space Weather Alerts.').catch(err => {
+            logger.error('Failed to send unsubscription SMS', { error: err, phoneNumber });
+          });
+
+          // Send email notification if email exists
+          if (user.email) {
+            await transporter.sendMail({
+              from: process.env.EMAIL_USER,
+              to: user.email,
+              subject: 'Unsubscription Confirmation',
+              text: 'You have successfully unsubscribed from Space Weather Alerts. To resubscribe, dial *384*36086#.',
+            }).catch(err => {
+              logger.error('Failed to send unsubscription email', { error: err, email: user.email });
+            });
+          }
+
           response = 'END You have unsubscribed.';
         } else {
           response = 'END You are not subscribed.';
