@@ -14,6 +14,7 @@ interface UssdBody {
 interface SessionData {
   location: string;
   role?: string;
+  email?: string;
   preferences: {
     geomagnetic: boolean;
     solarflare: boolean;
@@ -74,7 +75,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
       } else if (input === '3') {
         const user = await prisma.user.findUnique({ where: { phoneNumber } });
         if (user) {
-          response = `END Status: ${user.subscribed ? 'Subscribed' : 'Unsubscribed'}, Location: ${user.location || 'Not set'}, Role: ${user.role || 'General'}, Preferences: ${JSON.stringify(user.preferences || '{}')}`;
+          response = `END Status: ${user.subscribed ? 'Subscribed' : 'Unsubscribed'}, Location: ${user.location || 'Not set'}, Role: ${user.role || 'General'}, Email: ${user.email || 'Not set'}, Preferences: ${JSON.stringify(user.preferences || '{}')}`;
         } else {
           response = 'END Not registered. Dial *1 to subscribe.';
         }
@@ -118,17 +119,36 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         return;
       }
       sessions[sessionId] = { ...session, role };
-      response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
+      response = 'CON Enter your email for critical alerts (or 0 to skip):';
     }
-    // Step 4 and Beyond: Adjust Preferences and Subscribe
-    else if (step >= 4 && userInput[0] === '1') {
+    // Step 4: Enter Email (Subscription Flow)
+    else if (step === 4 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
         delete sessions[sessionId];
         return;
       }
       const session = sessions[sessionId];
-      const { location, role, preferences } = session;
+      const email = input.trim();
+      if (input === '0') {
+        sessions[sessionId] = { ...session, email: undefined };
+        response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
+      } else if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        response = 'CON Invalid email. Enter a valid email (e.g., user@example.com) or 0 to skip:';
+      } else {
+        sessions[sessionId] = { ...session, email };
+        response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
+      }
+    }
+    // Step 5 and Beyond: Adjust Preferences and Subscribe
+    else if (step >= 5 && userInput[0] === '1') {
+      if (!sessions[sessionId]) {
+        response = 'END Session expired. Start again.';
+        delete sessions[sessionId];
+        return;
+      }
+      const session = sessions[sessionId];
+      const { location, role, email, preferences } = session;
 
       if (input === '1' || input === '2' || input === '3' || input === '4' || input === '5' || input === '6') {
         const key = input === '1' ? 'geomagnetic' :
@@ -148,8 +168,8 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         }
         const user = await prisma.user.upsert({
           where: { phoneNumber },
-          update: { location, subscribed: true, role, preferences },
-          create: { phoneNumber, location, subscribed: true, role, preferences },
+          update: { location, subscribed: true, role, email, preferences },
+          create: { phoneNumber, location, subscribed: true, role, email, preferences },
         });
         logger.info('Upsert result', user);
         await sendSMS(phoneNumber, 'Thank you for subscribing to Space Weather Alerts!');

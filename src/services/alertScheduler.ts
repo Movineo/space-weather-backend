@@ -16,9 +16,19 @@ const transporter = nodemailer.createTransport({
 export const startAlertScheduler = () => {
   const poll = async () => {
     try {
-      const events = await fetchSpaceWeatherEvents(''); // Pass a dummy phone number; will be replaced with user-specific calls
-      if (events.length > 0) {
-        const users = await prisma.user.findMany({ where: { subscribed: true } });
+      const users = await prisma.user.findMany({ where: { subscribed: true } });
+      if (users.length === 0) {
+        logger.info('No subscribed users found');
+        return;
+      }
+
+      for (const user of users) {
+        // Fetch events specific to the user
+        const events = await fetchSpaceWeatherEvents(user.phoneNumber);
+        if (events.length === 0) {
+          logger.info(`No events for user ${user.phoneNumber}`);
+          continue;
+        }
 
         for (const event of events) {
           // Check if an alert for this type was sent within the last 5 minutes
@@ -31,32 +41,36 @@ export const startAlertScheduler = () => {
               },
             },
           });
+
           if (!recentAlert) {
-            const smsPromises = [];
-            const emailPromises = [];
+            const smsPromises: Promise<void>[] = [];
+            const emailPromises: Promise<void>[] = [];
 
-            for (const user of users) {
-              const prefs = user.preferences as { [key: string]: boolean } || {};
-              const isRelevant = prefs[event.type] !== false && (event.relevantToRoles.includes(user.role || 'general'));
+            const prefs = user.preferences as { [key: string]: boolean } || {};
+            const isRelevant = prefs[event.type] !== false && (event.relevantToRoles.includes(user.role || 'general'));
 
-              if (isRelevant) {
-                let targetedMessage = `${event.level}: ${event.message}`;
-                if (user.role === 'pilot') targetedMessage += ' Pilots: Check flight plans.';
-                else if (user.role === 'telecom') targetedMessage += ' Telecom: Monitor lines.';
-                else if (user.role === 'farmer') targetedMessage += ' Farmers: Prepare for power issues.';
+            if (isRelevant) {
+              let targetedMessage = `${event.level}: ${event.message}`;
+              if (user.role === 'pilot') targetedMessage += ' Pilots: Check flight plans.';
+              else if (user.role === 'telecom') targetedMessage += ' Telecom: Monitor lines.';
+              else if (user.role === 'farmer') targetedMessage += ' Farmers: Prepare for power issues.';
 
-                smsPromises.push(sendSMS(user.phoneNumber, targetedMessage));
-                if (event.level === 'Critical' && user.email) {
-                  emailPromises.push(
-                    transporter.sendMail({
-                      from: process.env.EMAIL_USER,
-                      to: user.email,
-                      subject: `Critical Alert: ${event.type.toUpperCase()}`,
-                      text: targetedMessage,
-                    })
-                  );
-                }
-              }
+              smsPromises.push(sendSMS(user.phoneNumber, targetedMessage));
+              if (event.level === 'Critical' && user.email) {
+  emailPromises.push(
+    transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: user.email,
+      subject: `Critical Alert: ${event.type.toUpperCase()}`,
+      text: targetedMessage,
+    })
+    .then(() => {}) // Convert Promise<SentMessageInfo> to Promise<void>
+    .catch(err => {
+      logger.error('Failed to send email', { error: err, email: user.email });
+      throw err;
+    })
+  );
+}
             }
 
             await Promise.all([...smsPromises, ...emailPromises]);
@@ -69,13 +83,11 @@ export const startAlertScheduler = () => {
                 type: event.type,
               },
             });
-            logger.info(`Alert sent for event ${event.id} (Level: ${event.level}, Type: ${event.type})`);
+            logger.info(`Alert sent for event ${event.id} (Level: ${event.level}, Type: ${event.type}) to ${user.phoneNumber}`);
           } else {
             logger.info(`Skipped duplicate alert for ${event.id} (within 5 minutes)`);
           }
         }
-      } else {
-        logger.info('No significant space weather events found');
       }
     } catch (error) {
       logger.error('Error in alert scheduler', { error });
