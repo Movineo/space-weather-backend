@@ -7,7 +7,8 @@
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "postinstall": "prisma generate" 
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -28,7 +29,7 @@
     "@types/node": "^20.17.51",
     "@types/nodemailer": "^6.4.17",
     "@types/winston": "^2.4.4",
-    "prisma": "^5.7.0",
+    "prisma": "^5.22.0", 
     "ts-node": "^10.9.1",
     "typescript": "^5.8.3"
   }
