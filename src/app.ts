@@ -45,6 +45,10 @@ if (process.env.NODE_ENV !== 'production') {
   }));
 }
 
+app.get('/', (req, res) => {
+  res.send('Space Weather API is running.');
+})
+
 app.use('/api/users', userRoutes);
 app.use('/api/alerts', alertRoutes);
 
