@@ -48,7 +48,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
   res.setTimeout(5000, () => {
     logger.warn('USSD response timed out', { sessionId });
     res.setHeader('Content-Type', 'text/plain');
-    res.send('END Sorry, the request took too long. Please try again.');
+    res.send('END Request timed out.');
     res.end();
   });
 
@@ -62,116 +62,98 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
     logger.info('Parsed input', { userInput, step, input });
 
     if (step === 1 && input === '') {
-      response = 'CON Welcome to Space Weather Alerts!\n1. Subscribe\n2. Unsubscribe\n3. Check Status';
+      response = 'CON Welcome to Space Weather Alerts\n1. Subscribe\n2. Unsubscribe\n3. Check Status';
     } else if (step === 1) {
       if (input === '1') {
-        response = 'CON Where are you located? (e.g., Nairobi)';
+        response = 'CON Enter your location (e.g., Nairobi):';
       } else if (input === '2') {
         const user = await prisma.user.findUnique({ where: { phoneNumber } });
         if (user) {
           await prisma.user.update({ where: { phoneNumber }, data: { subscribed: false } });
           logger.info('Unsubscribed user', { phoneNumber });
-
-          await sendSMS(phoneNumber, 'You’ve unsubscribed from Space Weather Alerts. To resubscribe, dial *384*36086#.').catch(err => {
-            logger.error('Failed to send unsubscription SMS', { error: err, phoneNumber });
-          });
-
-          if (user.email) {
-            await transporter.sendMail({
-              from: process.env.EMAIL_USER,
-              to: user.email,
-              subject: 'Unsubscription Confirmation - Space Weather Alerts',
-              text: `Hello,\n\nYou have successfully unsubscribed from Space Weather Alerts.\n\nIf this was a mistake, you can resubscribe by dialing *384*36086#.\n\nThank you!`,
-            }).catch(err => {
-              logger.error('Failed to send unsubscription email', { error: err, email: user.email });
-            });
-          }
-
-          response = 'END You’ve unsubscribed. You’ll get a confirmation SMS soon. Dial *384*36086# to resubscribe.';
+          response = 'END You have unsubscribed.';
         } else {
-          response = 'END You’re not subscribed yet. Dial *1 to subscribe.';
+          response = 'END You are not subscribed.';
         }
         delete sessions[sessionId];
       } else if (input === '3') {
         const user = await prisma.user.findUnique({ where: { phoneNumber } });
         if (user) {
-          response = `END Your Status: ${user.subscribed ? 'Subscribed' : 'Not Subscribed'}\nLocation: ${user.location || 'Not set'}\nRole: ${user.role || 'General'}\nEmail: ${user.email || 'Not set'}\nPreferences: ${JSON.stringify(user.preferences || '{}')}`;
+          response = `END Status: ${user.subscribed ? 'Subscribed' : 'Unsubscribed'}, Location: ${user.location || 'Not set'}, Role: ${user.role || 'General'}, Email: ${user.email || 'Not set'}, Preferences: ${JSON.stringify(user.preferences || '{}')}`;
         } else {
-          response = 'END You’re not registered. Dial *1 to subscribe.';
+          response = 'END Not registered. Dial *1 to subscribe.';
         }
         delete sessions[sessionId];
       } else {
-        response = 'END Oops! Please pick 1, 2, or 3 only. Start again by dialing *384*36086#.';
+        response = 'END Invalid selection. Try again.';
         delete sessions[sessionId];
       }
     } else if (step === 2 && userInput[0] === '1') {
       const location = input.trim();
       if (!location) {
-        response = 'CON Please enter your location (e.g., Nairobi). It can’t be empty.';
+        response = 'CON Location cannot be empty. Enter your location:';
       } else if (!/^[a-zA-Z\s]+$/.test(location)) {
-        response = 'CON Sorry, use only letters and spaces for your location (e.g., Nairobi). Try again.';
+        response = 'CON Invalid location. Use letters only (e.g., Nairobi):';
       } else {
         sessions[sessionId] = {
           location,
           preferences: { geomagnetic: true, solarflare: false, radiation: false, cme: false, radioblackout: false, auroral: false },
         };
-        response = 'CON What’s your role?\n1. Pilot\n2. Telecom Operator\n3. Farmer\n4. General';
+        response = 'CON Select role:\n1. Pilot\n2. Telecom Operator\n3. Farmer\n4. General';
       }
     } else if (step === 3 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
-        response = 'END Oops! Something went wrong. Please start again by dialing *384*36086#.';
+        response = 'END Session expired. Start again.';
         delete sessions[sessionId];
         return;
       }
       const session = sessions[sessionId];
+      const { location } = session;
       let role: string;
       if (input === '1') role = 'pilot';
       else if (input === '2') role = 'telecom';
       else if (input === '3') role = 'farmer';
       else if (input === '4') role = 'general';
       else {
-        response = 'CON Sorry, pick a role using numbers 1 to 4 only (e.g., 1 for Pilot). Try again.';
+        response = 'CON Invalid role. Select role:\n1. Pilot\n2. Telecom Operator\n3. Farmer\n4. General';
         return;
       }
       sessions[sessionId] = { ...session, role };
-      response = 'CON Want to add an email for alerts?\n1. Yes\n2. No';
+      response = 'CON Email for critical alerts:\n1. Provide Email\n2. Skip Email';
     } else if (step === 4 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
-        response = 'END Oops! Something went wrong. Please start again by dialing *384*36086#.';
+        response = 'END Session expired. Start again.';
         delete sessions[sessionId];
         return;
       }
       const session = sessions[sessionId];
+      const { location, role } = session;
 
       if (input === '1') {
-        response = 'CON Enter your email (e.g., user@example.com)';
+        response = 'CON Enter your email (e.g., user@example.com):';
       } else if (input === '2') {
         sessions[sessionId] = { ...session, email: undefined };
-        response = `CON Pick your alerts:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save`;
+        response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
       } else {
-        response = 'CON Sorry, use 1 or 2 only (1 for Yes, 2 for No). Try again.';
+        response = 'CON Invalid selection. Email for critical alerts:\n1. Provide Email\n2. Skip Email';
       }
     } else if (step === 5 && userInput[0] === '1' && userInput[3] === '1') {
       if (!sessions[sessionId]) {
-        response = 'END Oops! Something went wrong. Please start again by dialing *384*36086#.';
+        response = 'END Session expired. Start again.';
         delete sessions[sessionId];
         return;
       }
       const session = sessions[sessionId];
       const email = input.trim();
-      if (!email) {
-        response = 'CON Email can’t be empty. Please enter your email (e.g., user@example.com) or type 0 to go back.';
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        response = 'CON That email doesn’t look right. Use a format like user@example.com with letters, numbers, and @domain.com. Try again or type 0 to go back.';
-      } else if (input === '0') {
-        response = 'CON Want to add an email for alerts?\n1. Yes\n2. No';
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        response = 'CON Invalid email. Enter a valid email (e.g., user@example.com):';
       } else {
         sessions[sessionId] = { ...session, email };
-        response = `CON Pick your alerts:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save`;
+        response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
       }
     } else if (step >= 6 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
-        response = 'END Oops! Something went wrong. Please start again by dialing *384*36086#.';
+        response = 'END Session expired. Start again.';
         delete sessions[sessionId];
         return;
       }
@@ -187,10 +169,10 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
                    'auroral';
         preferences[key] = !preferences[key];
         sessions[sessionId] = { ...session, preferences };
-        response = `CON Alerts updated! Pick again:\n1. Geomagnetic (${preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${preferences.auroral ? 'On' : 'Off'})\n7. Save`;
+        response = `CON Updated preferences. Select:\n1. Geomagnetic (${preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
       } else if (input === '7') {
         if (!location || !role) {
-          response = 'END Oops! Something went wrong. Please start again by dialing *384*36086#.';
+          response = 'END Invalid session data. Start again.';
           delete sessions[sessionId];
           return;
         }
@@ -201,38 +183,33 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         });
         logger.info('Upsert result', user);
 
-        await sendSMS(phoneNumber, 'You’re subscribed to Space Weather Alerts! You’ll get alerts soon.').catch(err => {
-          logger.error('Failed to send subscription SMS', { error: err, phoneNumber });
-        });
-
+        await sendSMS(phoneNumber, 'Thank you for subscribing to Space Weather Alerts!');
         if (email) {
           await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: email,
-            subject: 'Welcome to Space Weather Alerts!',
-            text: `Hi there,\n\nYou’re now subscribed to Space Weather Alerts!\n\nDetails:\n- Location: ${location}\n- Role: ${role}\n- Alerts: ${JSON.stringify(preferences)}\n\nYou’ll get SMS and critical alerts via email at ${email}.\n\nTo unsubscribe, dial *384*36086#.`,
+            subject: 'Successful Subscription to Space Weather Alerts',
+            text: `Thank you for subscribing to Space Weather Alerts!\n\nDetails:\n- Location: ${location}\n- Role: ${role}\n- Preferences: ${JSON.stringify(preferences)}\n\nYou will receive SMS and critical alerts via email at ${email}.`,
           }).catch(err => {
             logger.error('Failed to send subscription email', { error: err, email });
           });
         } else {
-          await sendSMS(phoneNumber, 'No email added. You’ll only get SMS alerts.').catch(err => {
-            logger.error('Failed to send no-email SMS', { error: err, phoneNumber });
-          });
+          await sendSMS(phoneNumber, 'Note: No email provided. You will only receive SMS alerts.');
         }
 
-        response = `END You’re all set in ${location} as a ${role}! Alerts: ${JSON.stringify(preferences)}`;
+        response = `END Subscribed in ${location} as ${role} with preferences: ${JSON.stringify(preferences)}!`;
         delete sessions[sessionId];
       } else {
-        response = 'CON Sorry, use numbers 1 to 7 only to pick alerts or save (e.g., 1 for Geomagnetic). Try again.';
+        response = 'CON Invalid input. Select:\n1. Geomagnetic\n2. Solar Flares\n3. Radiation Storms\n4. CMEs\n5. Radio Blackouts\n6. Auroral Activity\n7. Save and Subscribe';
       }
     } else {
       logger.warn('Invalid input or step', { text, userInput, step, input });
-      response = 'END Oops! Please start again by dialing *384*36086# and use only numbers.';
+      response = 'END Invalid input. Try again.';
       delete sessions[sessionId];
     }
   } catch (error: any) {
     logger.error('USSD error', { message: error.message, stack: error.stack, meta: error.meta });
-    response = 'END Something went wrong. Please try again by dialing *384*36086#.';
+    response = 'END An error occurred. Try again later.';
     delete sessions[sessionId];
   }
 
