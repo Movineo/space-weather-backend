@@ -13,9 +13,6 @@ dotenv.config();
 const app: Express = express();
 const prisma = new PrismaClient();
 
-// Trust proxy for ngrok
-app.set('trust proxy', true);
-
 // Parse JSON and URL-encoded bodies first
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
