@@ -8,12 +8,13 @@ datasource db {
 }
 
 model User {
-  id          Int     @id @default(autoincrement())
-  phoneNumber String  @unique
-  location    String
-  subscribed  Boolean @default(false)
-  role        String? @default("general") 
-  preferences  Json?    @default("{}") // {"geomagnetic": true, "solarflare": false}
+  id          Int      @id @default(autoincrement())
+  phoneNumber String   @unique
+  location    String?
+  subscribed  Boolean  @default(false)
+  role        String?  @default("general")
+  preferences Json?    // { "geomagnetic": true, "solarflare": false, "radiation": false, "cme": false, "radioblackout": false, "auroral": false }
+  email       String?
 }
 
 model Alert {
