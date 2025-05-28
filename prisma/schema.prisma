@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          Int     @id @default(autoincrement())
+  phoneNumber String  @unique
+  location    String
+  subscribed  Boolean @default(false)
+  role        String? @default("general") 
+  preferences  Json?    @default("{}") // {"geomagnetic": true, "solarflare": false}
+}
+
+model Alert {
+  id            Int             @id @default(autoincrement())
+  message       String
+  sentAt        DateTime
+  level         String?
+  userId        Int?
+  type          String?
+  AlertDelivery AlertDelivery[]
+}
+
+model AlertDelivery {
+  id          Int      @id @default(autoincrement())
+  alertId     Int
+  phoneNumber String
+  status      String
+  receivedAt  DateTime @default(now())
+  alert       Alert    @relation(fields: [alertId], references: [id])
+}
