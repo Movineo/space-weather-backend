@@ -119,7 +119,7 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         return;
       }
       sessions[sessionId] = { ...session, role };
-      response = 'CON Enter your email for critical alerts (or 0 to skip):';
+      response = 'CON Email for critical alerts:\n1. Provide Email\n2. Skip Email';
     } else if (step === 4 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
@@ -127,17 +127,31 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
         return;
       }
       const session = sessions[sessionId];
-      const email = input.trim();
-      if (input === '0') {
+      const { location, role } = session;
+
+      if (input === '1') {
+        response = 'CON Enter your email (e.g., user@example.com):';
+      } else if (input === '2') {
         sessions[sessionId] = { ...session, email: undefined };
         response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
-      } else if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        response = 'CON Invalid email. Enter a valid email (e.g., user@example.com) or 0 to skip:';
+      } else {
+        response = 'CON Invalid selection. Email for critical alerts:\n1. Provide Email\n2. Skip Email';
+      }
+    } else if (step === 5 && userInput[0] === '1' && userInput[3] === '1') {
+      if (!sessions[sessionId]) {
+        response = 'END Session expired. Start again.';
+        delete sessions[sessionId];
+        return;
+      }
+      const session = sessions[sessionId];
+      const email = input.trim();
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        response = 'CON Invalid email. Enter a valid email (e.g., user@example.com):';
       } else {
         sessions[sessionId] = { ...session, email };
         response = `CON Select alert preferences:\n1. Geomagnetic (${session.preferences.geomagnetic ? 'On' : 'Off'})\n2. Solar Flares (${session.preferences.solarflare ? 'On' : 'Off'})\n3. Radiation Storms (${session.preferences.radiation ? 'On' : 'Off'})\n4. CMEs (${session.preferences.cme ? 'On' : 'Off'})\n5. Radio Blackouts (${session.preferences.radioblackout ? 'On' : 'Off'})\n6. Auroral Activity (${session.preferences.auroral ? 'On' : 'Off'})\n7. Save and Subscribe`;
       }
-    } else if (step >= 5 && userInput[0] === '1') {
+    } else if (step >= 6 && userInput[0] === '1') {
       if (!sessions[sessionId]) {
         response = 'END Session expired. Start again.';
         delete sessions[sessionId];
@@ -179,6 +193,8 @@ router.post('/ussd', async (req: Request<{}, {}, UssdBody>, res: Response) => {
           }).catch(err => {
             logger.error('Failed to send subscription email', { error: err, email });
           });
+        } else {
+          await sendSMS(phoneNumber, 'Note: No email provided. You will only receive SMS alerts.');
         }
 
         response = `END Subscribed in ${location} as ${role} with preferences: ${JSON.stringify(preferences)}!`;
