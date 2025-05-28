@@ -6,7 +6,7 @@ export interface SpaceWeatherEvent {
   message: string;
   issuedAt: string;
   level: 'Watch' | 'Warning' | 'Critical';
-  type: 'geomagnetic' | 'solarflare' | 'radiation';
+  type: 'geomagnetic' | 'solarflare' | 'radiation' ;
 }
 
 export const fetchSpaceWeatherEvents = async (): Promise<SpaceWeatherEvent[]> => {
@@ -49,6 +49,10 @@ export const fetchSpaceWeatherEvents = async (): Promise<SpaceWeatherEvent[]> =>
     logger.warn('Failed to fetch solar flare data', { error });
   }
 
+
+
+  // Note: Radiation Storms data source is currently unavailable
+
   // Radiation Storms block commented out due to persistent 404
   // try {
   //   const radiationResponse = await axios.get('https://services.swpc.noaa.gov/json/goes/primary/integral-proton-flux-5m.json');
@@ -65,6 +69,8 @@ export const fetchSpaceWeatherEvents = async (): Promise<SpaceWeatherEvent[]> =>
   // } catch (error) {
   //   logger.warn('Failed to fetch radiation data', { error });
   // }
+
+  
 
   if (events.length === 0) {
     logger.info('No significant space weather events found');
